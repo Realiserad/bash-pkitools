@@ -1,0 +1,54 @@
+#!/bin/bash
+
+GREEN='\033[1;32m'
+RED='\033[1;31m'
+NORMAL='\033[0m'
+
+if [ "$#" -ne 1 ]; then
+  echo "You must specify a domain name."
+  exit
+fi
+
+cd /tmp
+cd $(mktemp -d)
+
+# Download the leaf certificate
+CERT=$(openssl s_client -connect $1:443 -servername $1 2>&1 < /dev/null | sed -n '/-----BEGIN/,/-----END/p')
+
+if [ -z "$CERT" ]; then
+  echo "Could not retrieve certificate. Does the domain exist/use HTTPS?"
+  exit
+fi
+
+echo "$CERT" > $1
+
+# Extract the OCSP responder (ugly but works)
+URI=$(openssl x509 -noout -ocsp_uri -in $1)
+[[ $URI =~ ^https?://[^/]+ ]] && HOST="${BASH_REMATCH[0]}"
+HOST=$(echo "$HOST" | sed 's/https\?:\/\///')
+
+if [ -z "$URI" ]; then
+  echo "No OCSP responder found in the certificate."
+  exit
+fi
+
+# Download and split the certificate chain
+openssl s_client -connect $1:443 -servername $1 -showcerts 2>&1 < /dev/null | sed -n '/-----BEGIN/,/-----END/p' > chain.pem
+csplit -f cert- chain.pem '/-----BEGIN CERTIFICATE-----/' '{*}' 2>&1 > /dev/null
+
+if [ ! -f cert-02 ]; then
+  echo "Unable to retrieve issuer certificate."
+  exit
+fi
+
+# Make an OCSP request
+# add -text for more information
+OUT=$(openssl ocsp -issuer cert-02 -cert $1 -no_nonce -header "HOST" "$HOST" -CAfile chain.pem -VAfile chain.pem -url $URI)
+
+# Add some colour coding to the output
+OUT="${OUT/: revoked/: ${RED}revoked${NORMAL}}"
+OUT="${OUT/: good/: ${GREEN}good${NORMAL}}"
+
+# Print OCSP response
+echo "Checking revocation status using $URI"
+echo -e "$OUT"
