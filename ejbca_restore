@@ -1,0 +1,92 @@
+#!/bin/bash
+
+#################################################################
+###                                                           ###
+###            EJBCA Restore Script for MariaDB               ###
+###                                                           ###
+#################################################################
+
+# This script relies on Percona XtraBackup, and this package must
+# be installed before making any backups.
+
+# Backup directory from where the backup is restored, can be mapped
+# to e.g. an NFS share
+BACKUP_DIR='/var/opt/backups'
+
+# The passphrase which protects the backup, clear this variable
+# to make the script ask for the passphrase.
+PWD=
+
+################################################################
+
+# The user running this script must be in the wheel group, unless
+# the script is running as root
+if [ "$UID" -ne 0 ]; then
+  exec sudo bash "$0" "$@"
+fi
+
+if [ "$(id -u)" != "0" ]; then
+  echo "Root access denied."
+  exit 1
+fi
+
+# MariaDB must be stopped before the backup is restored
+if systemctl is-active --quiet mysql; then
+  echo 'Cannot restore a backup while MariaDB is running.'
+  exit 1
+fi
+
+# Let the user select the backup to restore.
+echo 'Available options:'
+PS3='Select backup to restore: '
+select opt in "$BACKUP_DIR/"xb_*.tar.gz.enc "Quit"; do
+  break
+done
+
+if [ -z "$opt" ]; then
+  echo "$REPLY is not a valid option."
+  exit 1
+fi
+
+if [ "$opt" = "Quit" ]; then
+  echo 'Bye.'
+  exit
+fi
+
+if [ -z "$PWD" ]; then
+  read -s -p 'Password for backup: ' PWD
+  echo ""
+fi
+
+# Move the current database somewhere else in case something
+# goes sideways
+DATE=$(date '+%Y%m%d%H%M%S')
+mkdir "/tmp/mysql_old${DATE}/"
+mv /var/lib/mysql/* "/tmp/mysql_old${DATE}/"
+
+# Write the backup encryption password to a temporary file, only
+# readable by the current user. Writing the password to disk is
+# not optimal, but we need to conceal it from ps.
+ENC_KEY_PASS_FILE="/tmp/mysql_restore${DATE}.pass"
+echo -n "$PWD" > "$ENC_KEY_PASS_FILE"
+chmod 600 "$ENC_KEY_PASS_FILE"
+
+# Restore the backup
+echo 'Decrypting and decompressing backup... (this may take some time)'
+BACKUP_SOURCE="/tmp/mysql_restore${DATE}"
+mkdir "$BACKUP_SOURCE"
+openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" \
+  | tar xz -C "$BACKUP_SOURCE"
+innobackupex --copy-back "$BACKUP_SOURCE"
+
+chown -R mysql: /var/lib/mysql
+
+read -s -p 'Do you want to start MariaDB? (y/N) ' start
+echo ""
+if [ "$start" = "y" ]; then
+  echo "Starting MariaDB..."
+  systemctl start mysql
+fi
+
+rm -f "$ENC_KEY_PASS_FILE"
+rm -rf "$BACKUP_SOURCE"
