@@ -36,21 +36,24 @@ if systemctl is-active --quiet mysql; then
   exit 1
 fi
 
+# Warn the user about potential loss of data
+read -p '** WARNING ** You are about to wipe the existing database! Do you want to proceed? (y/N) ' wipe
+echo ""
+if [ "$wipe" != "y" ] && [ "$wipe" != "Y" ]; then
+  echo 'Aborting restore.'
+  exit 1
+fi
+
 # Let the user select the backup to restore.
-echo 'Available options:'
+echo 'Available backups:'
 PS3='Select backup to restore: '
-select opt in "$BACKUP_DIR/"xb_*.tar.gz.enc "Quit"; do
+select opt in "$BACKUP_DIR/"xb_*.tar.gz.enc; do
   break
 done
 
 if [ -z "$opt" ]; then
-  echo "$REPLY is not a valid option."
+  echo "Option $REPLY is not a valid backup. Bye!"
   exit 1
-fi
-
-if [ "$opt" = "Quit" ]; then
-  echo 'Bye.'
-  exit
 fi
 
 if [ -z "$PWD" ]; then
@@ -58,11 +61,7 @@ if [ -z "$PWD" ]; then
   echo ""
 fi
 
-# Move the current database somewhere else in case something
-# goes sideways
 DATE=$(date '+%Y%m%d%H%M%S')
-mkdir "/tmp/mysql_old${DATE}/"
-mv /var/lib/mysql/* "/tmp/mysql_old${DATE}/"
 
 # Write the backup encryption password to a temporary file, only
 # readable by the current user. Writing the password to disk is
@@ -70,6 +69,9 @@ mv /var/lib/mysql/* "/tmp/mysql_old${DATE}/"
 ENC_KEY_PASS_FILE="/tmp/mysql_restore${DATE}.pass"
 echo -n "$PWD" > "$ENC_KEY_PASS_FILE"
 chmod 600 "$ENC_KEY_PASS_FILE"
+
+# Wipe existing database files
+rm -rf /var/lib/mysql/*
 
 # Restore the backup
 echo 'Decrypting and decompressing backup... (this may take some time)'
