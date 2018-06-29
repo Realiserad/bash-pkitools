@@ -83,9 +83,9 @@ innobackupex --copy-back "$BACKUP_SOURCE"
 
 chown -R mysql: /var/lib/mysql
 
-read -s -p 'Do you want to start MariaDB? (y/N) ' start
+read -p 'Do you want to start MariaDB? (y/N) ' start
 echo ""
-if [ "$start" = "y" ]; then
+if [ "$start" = "y" ] || [ "$start" = "Y" ]; then
   echo "Starting MariaDB..."
   systemctl start mysql
 fi
