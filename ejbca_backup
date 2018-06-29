@@ -99,10 +99,16 @@ innobackupex --apply-log \
 
 echo 'Compressing and encrypting backup... (this may take some time)'
 
+PV=$(which pv)
 cd "$BACKUP_FILES_DIR_TMP"
-tar cz * | \
-  openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -e \
-  > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
-
+if [ -z "$PV" ]; then
+  tar cz * | \
+    openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -e \
+    > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
+else
+  tar cz * | \
+    openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -e | \
+    pv -p -t -b > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
+fi
 rm -r "$ENC_KEY_PASS_FILE"
 rm -rf "$BACKUP_FILES_DIR_TMP"

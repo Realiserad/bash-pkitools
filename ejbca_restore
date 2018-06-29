@@ -77,10 +77,19 @@ rm -rf /var/lib/mysql/*
 echo 'Decrypting and decompressing backup... (this may take some time)'
 BACKUP_SOURCE="/tmp/mysql_restore${DATE}"
 mkdir "$BACKUP_SOURCE"
-openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" \
-  | tar xz -C "$BACKUP_SOURCE"
-innobackupex --copy-back "$BACKUP_SOURCE"
+PV=$(which pv)
 
+if [ -z "$PV" ]; then
+  echo '** HINT ** Install pv to track progress.'
+  openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" | \
+    tar xz -C "$BACKUP_SOURCE"
+else
+  openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" | \
+    pv -p -t -b | \
+    tar xz -C "$BACKUP_SOURCE"
+fi
+
+innobackupex --copy-back "$BACKUP_SOURCE"
 chown -R mysql: /var/lib/mysql
 
 read -p 'Do you want to start MariaDB? (y/N) ' start
