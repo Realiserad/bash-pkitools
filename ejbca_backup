@@ -34,10 +34,6 @@ BACKUP_DIR='/var/opt/backups'
 # to make the script ask for the passphrase.
 PWD=
 
-# Additional options passed to Percona XtraBackup. See this page
-# for reference: https://goo.gl/EEgq4d
-#XTRA_OPTIONS='--galera-info'
-
 ################################################################
 
 if [ ! -f "$MYSQL_CNF" ]; then
@@ -79,7 +75,6 @@ fi
 DATE=$(date '+%Y%m%d%H%M%S')
 HOSTNAME=$(hostname)
 BACKUP_NAME="xb_ejbca_${HOSTNAME}_${DATE}"
-BACKUP_FILES_DIR_TMP="/tmp/$BACKUP_NAME"
 ENC_KEY_PASS_FILE="/tmp/$BACKUP_NAME.pass"
 
 # Write the backup encryption password to a temporary file, only
@@ -88,27 +83,30 @@ ENC_KEY_PASS_FILE="/tmp/$BACKUP_NAME.pass"
 echo -n "$PWD" > "$ENC_KEY_PASS_FILE"
 chmod 600 "$ENC_KEY_PASS_FILE"
 
-# Create the backup in the temporary backup files directory e.g.
-# /tmp/xb_ejbca_hostname_20180101133700
-innobackupex --defaults-extra-file="$MYSQL_CNF" \
-  --no-timestamp \
-  "$BACKUP_FILES_DIR_TMP"
-
-innobackupex --apply-log \
-  "$BACKUP_FILES_DIR_TMP"
-
-echo 'Compressing and encrypting backup... (this may take some time)'
-
+# Create the backup in the backup directory e.g.
+# /var/opt/backups/xb_ejbca_hostname_20180101133700.tar.gz.enc
 PV=$(which pv)
-cd "$BACKUP_FILES_DIR_TMP"
+echo 'Compressing and encrypting backup... (this may take some time)'
 if [ -z "$PV" ]; then
-  tar cz * | \
-    openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -e \
+  echo '** HINT ** Install pv to track progress'
+  xtrabackup --defaults-extra-file="$MYSQL_CNF" \
+      --host=127.0.0.1 \
+      --backup \
+      --stream=tar | \
+    gzip | \
+    openssl enc -aes-256-cbc \
+      -pass "file:$ENC_KEY_PASS_FILE" -e \
     > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
 else
-  tar cz * | \
-    openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -e | \
-    pv -p -t -b > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
+  xtrabackup --defaults-extra-file="$MYSQL_CNF" \
+      --host=127.0.0.1 \
+      --backup \
+      --stream=tar | \
+    gzip | \
+    openssl enc -aes-256-cbc \
+      -pass "file:$ENC_KEY_PASS_FILE" -e | \
+    pv -p -t -b \
+    > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
 fi
-rm -r "$ENC_KEY_PASS_FILE"
-rm -rf "$BACKUP_FILES_DIR_TMP"
+
+shred --remove "$ENC_KEY_PASS_FILE"

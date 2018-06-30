@@ -7,7 +7,9 @@
 #################################################################
 
 # This script relies on Percona XtraBackup, and this package must
-# be installed before making any backups.
+# be installed before making any backups. Ensure the backup being
+# restored was not created by a newer version of XtraBackup than
+# the version available during a restore.
 
 # Backup directory from where the backup is restored, can be mapped
 # to e.g. an NFS share
@@ -38,7 +40,6 @@ fi
 
 # Warn the user about potential loss of data
 read -p '** WARNING ** You are about to wipe the existing database! Do you want to proceed? (y/N) ' wipe
-echo ""
 if [ "$wipe" != "y" ] && [ "$wipe" != "Y" ]; then
   echo 'Aborting restore.'
   exit 1
@@ -66,7 +67,7 @@ DATE=$(date '+%Y%m%d%H%M%S')
 # Write the backup encryption password to a temporary file, only
 # readable by the current user. Writing the password to disk is
 # not optimal, but we need to conceal it from ps.
-ENC_KEY_PASS_FILE="/tmp/mysql_restore${DATE}.pass"
+ENC_KEY_PASS_FILE="/tmp/xb_ejbca_restore_${DATE}.pass"
 echo -n "$PWD" > "$ENC_KEY_PASS_FILE"
 chmod 600 "$ENC_KEY_PASS_FILE"
 
@@ -75,29 +76,35 @@ rm -rf /var/lib/mysql/*
 
 # Restore the backup
 echo 'Decrypting and decompressing backup... (this may take some time)'
-BACKUP_SOURCE="/tmp/mysql_restore${DATE}"
-mkdir "$BACKUP_SOURCE"
 PV=$(which pv)
-
 if [ -z "$PV" ]; then
   echo '** HINT ** Install pv to track progress.'
   openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" | \
-    tar xz -C "$BACKUP_SOURCE"
+    tar xzi -C /var/lib/mysql
 else
   openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" | \
     pv -p -t -b | \
-    tar xz -C "$BACKUP_SOURCE"
+    tar xzi -C /var/lib/mysql
 fi
 
-innobackupex --copy-back "$BACKUP_SOURCE"
-chown -R mysql: /var/lib/mysql
+echo 'Copy-back complete! Preparing the backup...'
+xtrabackup --prepare --target-dir=/var/lib/mysql/
+# Your backup is now clean and consistent, and ready to restore.
+# However, you might want to take an extra step to make restores
+# as quick as possible. This is to prepare the backup a second
+# time. The first time makes the data files self-consistent, but
+# it doesn’t create fresh InnoDB log files. If you restore the
+# backup at this point and start MariaDB, it will have to create
+# new log files, which could take a little while, and you might
+# not want to wait for that.
+xtrabackup --prepare --target-dir=/var/lib/mysql/
+
+chown -R mysql:mysql /var/lib/mysql
 
 read -p 'Do you want to start MariaDB? (y/N) ' start
-echo ""
 if [ "$start" = "y" ] || [ "$start" = "Y" ]; then
   echo "Starting MariaDB..."
   systemctl start mysql
 fi
 
-rm -f "$ENC_KEY_PASS_FILE"
-rm -rf "$BACKUP_SOURCE"
+shred --remove "$ENC_KEY_PASS_FILE"
