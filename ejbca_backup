@@ -12,7 +12,7 @@
 # the mysql group. You should also prepare a MariaDB user used for
 # backing up data only. This user can be created as follows:
 # mysql> CREATE USER 'backup'@'localhost' IDENTIFIED BY 'foo123';
-# mysql> GRANT RELOAD, LOCK TABLES, REPLICATION CLIENT ON *.* TO 'backup'@'localhost';
+# mysql> GRANT RELOAD, LOCK TABLES, PROCESS, REPLICATION CLIENT ON *.* TO 'backup'@'localhost';
 # mysql> FLUSH PRIVILEGES;
 
 # Location of the MariaDB configuration file with the username
