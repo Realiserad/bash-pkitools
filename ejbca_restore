@@ -34,7 +34,17 @@ fi
 
 # MariaDB must be stopped before the backup is restored
 if systemctl is-active --quiet mysql; then
-  echo 'Cannot restore a backup while MariaDB is running.'
+  read -p 'Cannot restore a backup while MariaDB is running. Do you want to stop MariaDB now? (y/N) ' stopdb
+  if [ "$stopdb" != "y" ] && [ "$stopdb" != "Y" ]; then
+    exit 1
+  else
+    systemctl stop mysql
+  fi
+fi
+
+# Check if MariaDB is running again, just to make sure
+if systemctl is-active --quiet mysql; then
+  echo '** ERROR ** MariaDB is still running, stop MariaDB manually and run this script again.'
   exit 1
 fi
 
@@ -101,10 +111,19 @@ xtrabackup --prepare --target-dir=/var/lib/mysql/
 
 chown -R mysql:mysql /var/lib/mysql
 
-read -p 'Do you want to start MariaDB? (y/N) ' start
-if [ "$start" = "y" ] || [ "$start" = "Y" ]; then
-  echo "Starting MariaDB..."
-  systemctl start mysql
-fi
+options=("Create a new cluster - Use this option if you are restoring the database of the first node in a cluster." "Start MariaDB normally - Use this option if you are restoring a standalone instance of EJBCA or if you want to join a newly restored node to an existing cluster." "Do nothing - Choose this option if you want to manually start MariaDB later.")
+echo 'The database files are restored, but MariaDB is not running yet. What should I do next? '
+PS3='Choose an option '
+select opt in "${options[@]}"; do
+  case "$REPLY" in
+  1 ) galera_new_cluster
+      break;;
+  2 ) systemctl start mysql
+      break;;
+  3 ) break;;
+  * ) echo "Invalid option $REPLY. Try again..."
+      continue;;
+  esac
+done
 
 shred --remove "$ENC_KEY_PASS_FILE"
