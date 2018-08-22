@@ -1,0 +1,40 @@
+#!/bin/bash
+#####################################################
+###                                               ###
+###       Preload cardsets to Thales before       ###
+###              starting Wildfly                 ###
+###                                               ###
+#####################################################
+
+# Request root access to be able to use su
+if [ "$UID" -ne 0 ]; then
+  exec sudo bash "$0" "$@"
+fi
+if [ "$(id -u)" != "0" ]; then
+  echo "Root access denied."
+  exit 1
+fi
+
+# The preload must be done by the same user Wildfly
+# is running as, and systemd is starting Wildfly with
+# the 'wildfly' user per default
+su - wildfly
+
+PATH=/opt/nfast/bin
+export PATH
+
+# To preload the first cardset
+preload -c CardSet1 pause &
+
+# To preload any subsequent cardsets
+#preload -c CardSet2 exit
+
+# To preload the first soft token
+ppmk --preload SoftToken1 sleep 365d
+
+# To preload any subsequent soft tokens
+ppmk --preload SoftToken2 sleep 0
+
+# Finally start Wildfly using systemd
+exit
+systemctl start wildfly
