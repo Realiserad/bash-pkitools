@@ -1,0 +1,97 @@
+#!/bin/bash
+
+write_repo_file () {
+  FILE="/etc/yum.repos.d/offline-$1.repo"
+  if [ -f "$FILE" ]; then
+    rm -f "$FILE"
+  fi
+  echo "[offline-$1]" >> $FILE
+  echo "name=CentOS-\$releaseever - $1" >> $FILE
+  echo "baseurl=file:///var/repo/$1" >> $FILE
+  echo "enabled=0" >> $FILE
+  echo "gpgcheck=1" >> $FILE
+  echo "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7" >> $FILE
+}
+
+if [ -z "$1" ]; then
+  echo 'yom - yellowdog offline manager   '
+  echo '                                  '
+  echo 'Usage yom [mode] package          '
+  echo 'The following modes are available:'
+  echo '                                  '
+  echo '  prepare - install dependencies for yom.'
+  echo '  download - create an offline repository for a package, overwriting any'
+  echo '  existing offline repositories.'
+  echo '  list - list available offline repositories'
+  echo '  check - check the status of an offline repository'
+  echo '  install - install a previously downloaded package from the offline'
+  echo '  repository.'
+  echo '  delete - delete all packages from an existing offline repository'
+  exit 0
+fi
+
+if [ "$UID" -ne 0 ]; then
+  exec sudo bash "$0" "$@"
+fi
+
+if [ "$(id -u)" != "0" ]; then
+  echo "yom must be run as root."
+  exit 1
+fi
+
+if [ "$1" == "prepare" ]; then
+  yum install yum-plugin-downloadonly yum-utils createrepo -y
+  exit 0
+fi
+
+if [ ! -x "$(command -v createrepo)" ]; then
+  echo "Missing createrepo. Run 'yom prepare' to install."
+  exit 1
+fi
+
+if [ "$1" == "list" ]; then
+  echo 'Available offline repositories:'
+  ls /var/repo/
+  exit 0
+fi
+
+if [ "$1" == "check" ]; then
+  echo "Checking status of offline repository for $2."
+  repoclosure --repoid=offline-$2
+  exit 0
+fi 
+
+if [ "$1" == "install" ]; then
+  if [ -z "$2" ]; then
+    echo 'Missing package name'
+    exit 1
+  fi
+  echo 'Installing package $2 from offline repository'
+  yum --disablerepo=\* --enablerepo=offline-$2 install $2 -y
+  exit 0
+fi
+
+if [ "$1" == "delete" ]; then 
+  rm -rf /var/repo/$2
+  exit 0
+fi
+
+if [ "$1" == "download" ]; then
+  echo "Creating offline repository for $2"
+  if [ -d "/var/repo/$2" ]; then
+    rm -rf /var/repo/$2
+  fi
+  if [ -d "/var/repo/$2-installroot" ]; then
+    rm -rf /var/repo/$2-installroot
+  fi
+  mkdir /var/repo/$2
+  mkdir /var/repo/$2-installroot
+  yum install --downloadonly --installroot=/var/repo/$2-installroot --releasever=7 --downloaddir=/var/repo/$2 $2
+  createrepo --database /var/repo/$2
+  rm -rf /var/repo/$2-installroot
+  write_repo_file "$2"
+  exit 0
+fi
+
+echo "Unknown mode $1."
+exit 1 
