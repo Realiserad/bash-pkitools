@@ -44,11 +44,6 @@ if [ "$1" == "prepare" ]; then
   exit 0
 fi
 
-if [ ! -x "$(command -v createrepo)" ]; then
-  echo "Missing createrepo. Run 'yom prepare' to install."
-  exit 1
-fi
-
 if [ "$1" == "list" ]; then
   echo 'Available offline repositories:'
   ls /var/repo/
@@ -77,6 +72,10 @@ if [ "$1" == "delete" ]; then
 fi
 
 if [ "$1" == "download" ]; then
+  if [ ! -x "$(command -v createrepo)" ]; then
+    echo "Missing createrepo. Run 'yom prepare' to install."
+    exit 1
+  fi
   echo "Creating offline repository for $2"
   if [ -d "/var/repo/$2" ]; then
     rm -rf /var/repo/$2
