@@ -85,7 +85,7 @@ if [ "$1" == "download" ]; then
   fi
   mkdir "/var/repo/$2"
   mkdir "/var/repo/$2-installroot"
-  yum install "--downloadonly --installroot=/var/repo/$2-installroot --releasever=7 --downloaddir=/var/repo/$2 $2"
+  yum install --downloadonly --installroot=/var/repo/$2-installroot --releasever=7 --downloaddir=/var/repo/$2 $2
   createrepo --database /var/repo/$2
   rm -rf /var/repo/$2-installroot
   write_repo_file "$2"
