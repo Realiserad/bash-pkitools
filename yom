@@ -67,7 +67,7 @@ if [ "$1" == "install" ]; then
 fi
 
 if [ "$1" == "delete" ]; then 
-  rm -rf /var/repo/$2
+  rm -rf "/var/repo/$2"
   exit 0
 fi
 
@@ -78,14 +78,14 @@ if [ "$1" == "download" ]; then
   fi
   echo "Creating offline repository for $2"
   if [ -d "/var/repo/$2" ]; then
-    rm -rf /var/repo/$2
+    rm -rf "/var/repo/$2"
   fi
   if [ -d "/var/repo/$2-installroot" ]; then
-    rm -rf /var/repo/$2-installroot
+    rm -rf "/var/repo/$2-installroot"
   fi
-  mkdir /var/repo/$2
-  mkdir /var/repo/$2-installroot
-  yum install --downloadonly --installroot=/var/repo/$2-installroot --releasever=7 --downloaddir=/var/repo/$2 $2
+  mkdir "/var/repo/$2"
+  mkdir "/var/repo/$2-installroot"
+  yum install "--downloadonly --installroot=/var/repo/$2-installroot --releasever=7 --downloaddir=/var/repo/$2 $2"
   createrepo --database /var/repo/$2
   rm -rf /var/repo/$2-installroot
   write_repo_file "$2"
