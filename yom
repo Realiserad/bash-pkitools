@@ -6,7 +6,7 @@ write_repo_file () {
     rm -f "$FILE"
   fi
   echo "[offline-$1]" >> $FILE
-  echo "name=CentOS-\$releaseever - $1" >> $FILE
+  echo "name=CentOS-\$releasever - $1" >> $FILE
   echo "baseurl=file:///var/repo/$1" >> $FILE
   echo "enabled=0" >> $FILE
   echo "gpgcheck=1" >> $FILE
