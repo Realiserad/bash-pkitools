@@ -61,7 +61,7 @@ if [ "$1" == "install" ]; then
     echo 'Missing package name'
     exit 1
   fi
-  echo 'Installing package $2 from offline repository'
+  echo "Installing package $2 from offline repository"
   yum --disablerepo=\* --enablerepo=offline-$2 install $2 -y
   exit 0
 fi
