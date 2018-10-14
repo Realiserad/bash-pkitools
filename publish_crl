@@ -1,0 +1,162 @@
+#!/bin/bash
+
+############################################
+##                                        ##
+##   Script for publishing a CRL to       ##
+##   a remote server using scp            ##
+##                                        ##
+############################################
+
+# :: Instructions for installing CRL publisher ::
+# 1. Save this file to /opt/ejbca-custom/scripts/publish_crl.sh
+# 2. Make sure you can login to the database without sudo, do the following
+#  if sudo is required:
+#  sudo mysql -u root -p
+#  UPDATE mysql.user SET plugin = 'mysql_native_password', Password = PASSWORD('foo123') WHERE User = 'root';
+#  FLUSH PRIVILEGES;
+# 3. Set file permissions for primekey user
+#  sudo chown primekey:primekey /opt/ejbca-custom/scripts/publish_crl.sh
+#  sudo chmod 700 /opt/ejbca-custom/scripts/publish_crl.sh
+# 4. Update remote server and database password
+# 5. Manually run the script to make sure it's working as expected
+# 6. Create a cronjob for primekey to run the CRL publisher every 5 minutes
+#  crontab -e
+#  (add the following)
+#  */5 * * * * /opt/ejbca-custom/scripts/publish_crl.sh
+
+# The user for accessing the database
+db_user=
+
+# Password for accessing the database
+db_password=
+
+# Username of the ssh user on the remote server
+user=
+
+# Hostname or IP address of the remote server
+remote_server=
+
+# Base directory on the remote server where CRLs will be stored (without trailing slash)
+# Make sure this directory exists, since it won't be created by the script
+# Example: The full path of a CRL with CRL number 123 issued by a CA called "FooTrust CA" will be $remote_dir/FooTrustCA/123.crl
+remote_dir=
+
+# The name (as shown in EJBCA) of the CAs whose CRLs should be published, mapped to the subject DN
+# of these CAs in BCDN-order.
+declare -A subject_dn
+subject_dn["FooTrust CA"]="CN=FooTrust CA,O=FooTrust Ltd.,C=US"
+
+# The location of EJBCA's bin folder
+EJBCA_BIN=/opt/ejbca/bin
+
+# Uncomment this to add bash debugging
+#set -x
+
+#############################################
+## Methods                                 ##
+#############################################
+
+# $1 = the message to log
+log () {
+  logger "[CRL Publisher] $1"
+  echo "[INFO] $1"
+}
+
+# $1 = the name of the CA whose CRL should be written to disk
+get_crl () {
+  local aia_name=`echo "$1" | tr -d '[:space:]'`
+  ${EJBCA_BIN}/ejbca.sh ca getcrl --caname "${1}" -f "/tmp/$aia_name.crl.tmp"
+  if [ $? -eq 0 ]; then
+    mv "/tmp/$aia_name.crl.tmp" "/tmp/$aia_name.crl"
+    local crl_number_hex=`openssl crl -inform der -in "/tmp/$aia_name.crl" -noout -crlnumber | cut -c 11-` 
+    local crl_number_dec=`echo $((0x${crl_number_hex}))`
+    log "Successfully retrieved CRL #$crl_number_dec for CA $1 from the database."
+  else
+    rm -f "/tmp/$aia_name.crl.tmp"
+    log "Cannot extract CRL for CA $1 using the EJBCA CLI. Is EJBCA running?"
+  fi 
+}
+
+# $1 = the name of the CA whose CRL should be published
+publish_crl () {
+  # Do not publish if the CRL already exists on the remote server
+  local aia_name=`echo "$1" | tr -d '[:space:]'`
+  local crl_number_hex=`openssl crl -inform der -in "/tmp/$aia_name.crl" -noout -crlnumber | cut -c 11-` 
+  local crl_number_dec=`echo $((0x${crl_number_hex}))`
+  local crl_found=`ssh ${user}@${remote_server} "ls ${remote_dir}/${aia_name}/ | grep ${crl_number_dec}.crl"`
+  if [ ! -z "$crl_found" ]; then
+    log "Not publishing CRL #$crl_number_dec for CA $1 since it is already available on/is being transferred to the CRL server."
+    return 0
+  fi
+  # Transfer the CRL, check the return value of scp to determine if the transfer was successful
+  # To prevent someone from reading a corrupt file while the transfer is in progress, copy to
+  # a temporary file and then perform an atomic move.
+  scp "/tmp/$aia_name.crl" "$user@$remote_server:$remote_dir/$aia_name/$crl_number_dec.crl.tmp"
+  if [ $? -eq 0 ]; then
+    ssh "$user@$remote_server" "mv ${remote_dir}/${aia_name}/${crl_number_dec}.crl.tmp" "${remote_dir}/${aia_name}/${crl_number_dec}.crl"
+    log "**Successfully published CRL** $crl_number_dec for CA $1 to $remote_server:$remote_dir/$aia_name"
+  else 
+    log "Remote copy of CRL #$crl_number_dec to destination $remote_server:$remote_dir/$aia_name failed."
+    log "Check the following:"
+    log "  1. SSH access is configured for the user $user"
+    log "  2. The directory $remote_dir/$aia_name exists on the remote server $remote_server"
+    log "  3. The directory $remote_dir/$aia_name is writable by $user"
+  fi
+}
+
+#############################################
+## Main                                    ##
+#############################################
+
+if [ -z "$db_user" ]; then
+  log "Database user not set."
+  exit 1
+fi
+
+if [ -z "$db_password" ]; then
+  log "Database password not set."
+  exit 1
+fi
+
+if [ -z "$user" ]; then
+  log "Remote user not set."
+  exit 1
+fi
+
+if [ -z "$remote_server" ]; then
+  log "Remote server not set."
+  exit 1
+fi
+
+if [ -z "$remote_dir" ]; then
+  log "Remote directory not set."
+  exit 1
+fi
+
+for ca_name in "${!subject_dn[@]}"
+do
+  log "Running CRL check for CA $ca_name (${subject_dn[$ca_name]})."
+  aia_name=`echo "$ca_name" | tr -d '[:space:]'`
+  if [ ! -f "/tmp/$aia_name.crl" ]; then
+    # If there is no CRL on disk, fetch it from the database directly
+    log "No CRL /tmp/$aia_name.crl found, fetching the latest CRL for $ca_name from the database..."
+    get_crl "$ca_name"
+  else
+    # If there is already a CRL on disk, check the database for a newer CRL
+    sql_query="SELECT cRLNumber FROM CRLData WHERE issuerDN=\"${subject_dn[$ca_name]}\" ORDER BY thisUpdate DESC LIMIT 1;"
+    crl_number_in_db_dec=`mysql -u ${db_user} -p${db_password} -D ejbca -BN -e "${sql_query}"`
+    crl_number_on_disk_hex=`openssl crl -inform der -in "/tmp/$aia_name.crl" -noout -crlnumber | cut -c 11-` 
+    crl_number_on_disk_dec=`echo $((0x${crl_number_on_disk_hex}))`
+    log "Comparing CRLs for CA $ca_name (db=$crl_number_in_db_dec, disk=$crl_number_on_disk_dec)"
+    if [ "$crl_number_in_db_dec" -gt "$crl_number_on_disk_dec" ]; then
+      # There is a newer CRL in the database, write it to disk
+      log "Newer CRL found for CA $ca_name, fetching the latest CRL from the database..."
+      get_crl "$ca_name"
+    fi
+  fi
+  # If a CRL is available, publish it
+  if [ -f "/tmp/$aia_name.crl" ]; then
+    log "CRL for $ca_name (/tmp/$aia_name.crl) is available for publishing, trying to publish!"
+    publish_crl "${ca_name}"
+  fi
+done
