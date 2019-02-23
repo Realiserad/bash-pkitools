@@ -43,7 +43,7 @@ fi
 
 # Make an OCSP request
 # add -text for more information
-OUT=$(openssl ocsp -issuer cert-02 -cert $1 -no_nonce -header "HOST" "$HOST" -CAfile chain.pem -VAfile chain.pem -url $URI)
+OUT=$(openssl ocsp -issuer cert-02 -cert "$1" -no_nonce -host "$HOST" -CAfile chain.pem -VAfile chain.pem -url "$URI")
 
 # Add some colour coding to the output
 OUT="${OUT/: revoked/: ${RED}revoked${NORMAL}}"
