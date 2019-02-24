@@ -11,17 +11,23 @@
 # restored was not created by a newer version of XtraBackup than
 # the version available during a restore.
 
+# Make sure you can access mysql without using sudo. On some
+# distributions this is not possible by default, and you need
+# to run the following commands:
+# mysql> UPDATE mysql.user SET plugin = 'mysql_native_password' WHERE User='root';
+# mysql> FLUSH PRIVILEGES;
+
 # Backup directory from where the backup is restored, can be mapped
 # to e.g. an NFS share
-BACKUP_DIR='/var/opt/backups'
+BACKUP_DIR='/nfs'
 
 # The service name of the appserver
-#APPSRV_TYPE=jboss
-APPSRV_TYPE=wildfly
+APPSRV_TYPE=jboss
+#APPSRV_TYPE=wildfly
 
 # The passphrase which protects the backup, clear this variable
 # to make the script ask for the passphrase.
-PWD=
+PWD=foo123
 
 ################################################################
 
@@ -39,27 +45,29 @@ fi
 # The database should be stopped before the restore process starts.
 # Technically it is possible to do the restore with the database running
 # but it could result in weird errors when incoming requests are processed.
-if systemctl is-active --quiet mysql; then
-  read -p 'Cannot restore a backup while MariaDB is running. Do you want to stop MariaDB now? (y/N) ' stopdb
-  if [ "$stopdb" != "y" ] && [ "$stopdb" != "Y" ]; then
-    exit 1
-  else
-    read -s -p 'Enter the MariaDB root password: ' root_pwd 
-    mysqladmin -uroot -p"$root_pwd" -h127.0.0.1 --protocol=tcp shutdown
-    if [ $? -ne 0 ]; then
-      echo "Shutdown of MariaDB failed with non-zero exit code."
-      exit 1
-    fi
-  fi
-fi
+#if systemctl is-active --quiet mysql; then
+#  read -p 'Cannot restore a backup while MariaDB is running. Do you want to stop MariaDB now? (y/N) ' stopdb
+#  if [ "$stopdb" != "y" ] && [ "$stopdb" != "Y" ]; then
+#    exit 1
+#  else
+#    read -s -p 'Enter the MariaDB root password: ' root_pwd 
+#    mysqladmin -uroot -p"$root_pwd" -h127.0.0.1 --protocol=tcp shutdown
+#    if [ $? -ne 0 ]; then
+#      echo "Shutdown of MariaDB failed with non-zero exit code."
+#      exit 1
+#    fi
+#  fi
+#fi
 
-# Warn the user about potential loss of data
-echo ""
-read -p '** WARNING ** You are about to wipe the existing database! Do you want to proceed? (y/N) ' wipe
-if [ "$wipe" != "y" ] && [ "$wipe" != "Y" ]; then
-  echo 'Aborting restore.'
-  exit 1
-fi
+# Print notice text to user before starting the backup procedure
+echo '#############################################################'
+echo '#                      !ATTENTION!                          #'
+echo '# This will restore your MariaDB databases using a backup.  #'
+echo '# Ensure this instance/cluster is not taking any traffic    #'
+echo '# (e.g. by disconnecting it from the load balancer)         #'
+echo '# and stop MariaDB and your application server before       #'
+echo '# continuing.                                               #'
+echo '#############################################################'
 
 # Let the user select the backup to restore.
 echo 'Available backups:'
@@ -86,6 +94,14 @@ DATE=$(date '+%Y%m%d%H%M%S')
 ENC_KEY_PASS_FILE="/tmp/xb_ejbca_restore_${DATE}.pass"
 echo -n "$PWD" > "$ENC_KEY_PASS_FILE"
 chmod 600 "$ENC_KEY_PASS_FILE"
+
+# Warn the user about potential loss of data
+echo ""
+read -p '** WARNING ** You are about to wipe the existing databases! Do you want to proceed? (y/N) ' wipe
+if [ "$wipe" != "y" ] && [ "$wipe" != "Y" ]; then
+  echo 'Aborting restore.'
+  exit 1
+fi
 
 # Wipe existing database files
 rm -rf /var/lib/mysql/*
@@ -116,24 +132,40 @@ xtrabackup --prepare --target-dir=/var/lib/mysql/
 xtrabackup --prepare --target-dir=/var/lib/mysql/
 
 chown -R mysql:mysql /var/lib/mysql
-
-options=("Create a new cluster - Use this option if you are restoring the database of the first node in a cluster." "Start MariaDB normally - Use this option if you are restoring a standalone instance of EJBCA." "Do nothing - Choose this option if you want to manually start MariaDB later.")
-echo 'The database files are restored, but MariaDB is not running yet. What should I do next? '
-PS3='Choose an option '
-select opt in "${options[@]}"; do
-  case "$REPLY" in
-  1 ) mysqld &
-      galera_new_cluster
-      sudo systemctl restart "$APPSRV_TYPE"
-      break;;
-  2 ) mysqld &
-      sudo systemctl start mysql
-      sudo systemctl restart "$APPSRV_TYPE"
-      break;;
-  3 ) break;;
-  * ) echo "Invalid option $REPLY. Try again..."
-      continue;;
-  esac
-done
-
 shred --remove "$ENC_KEY_PASS_FILE"
+
+# Print banner after successful restore
+echo '#############################################################'
+echo '#                      !ATTENTION!                          #'
+echo '# Your MariaDB databases have been restored.                #'
+echo '# You can now start MariaDB/bootstrap the cluster and       #'
+echo '# start the application server as usual.                    #'
+echo '#                                                           #'
+echo '# If you are operating a cluster, clean /var/lib/mysql of   #'
+echo '# joining nodes before connecting them to trigger a full    #'
+echo '# SST.                                                      #'
+echo '#############################################################'
+
+# If the DBMS was running during the restore, we need to restart it
+# to clear some caches. This is obviously not supported in production
+# where MariaDB should be shut down manually before restoring the
+# backup, but it makes sense to support this during development.
+if systemctl is-active --quiet mysql; then
+  read -s -p 'Enter the MariaDB root password: ' root_pwd
+  echo ""
+  # A normal systemctl restart mysql does not work.
+  mysqladmin -uroot -p"$root_pwd" -h127.0.0.1 --protocol=tcp shutdown
+  if [ $? -ne 0 ]; then
+    echo 'Shutdown of MariaDB failed with non-zero exit code when executing:'
+    echo '  > mysqladmin -uroot -p*** -h127.0.0.1 --protocol=tcp shutdown'
+    echo 'This error should be harmless, but you may have to reboot your'
+    echo 'machine to clear some caches.'
+    exit 1
+  fi
+fi
+
+# Need to restart the application server if it was running (again, not
+# a supported procedure in production).
+if systemctl is-active --quiet "$APPSRV_TYPE"; then
+  systemctl restart "$APPSRV_TYPE"
+fi
