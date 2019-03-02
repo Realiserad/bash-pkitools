@@ -36,6 +36,10 @@ PWD=
 
 ################################################################
 
+# This will create XtraBackup files directory in /tmp instead of
+# cluttering the user's current working directory.
+cd /tmp
+
 if [ ! -f "$MYSQL_CNF" ]; then
   echo "The MySQL configuration file $MYSQL_CNF does not exist."
   exit 1
