@@ -1,9 +1,9 @@
 #!/bin/bash
 
 #################################################################
-###                                                           ###
-###              EJBCA Backup Script for MariaDB              ###
-###                                                           ###
+####                                                         ####
+####             EJBCA Backup Script for MariaDB             ####
+####                                                         ####
 #################################################################
 
 # This script relies on Percona XtraBackup, and this package must
