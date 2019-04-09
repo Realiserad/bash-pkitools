@@ -6,16 +6,19 @@
 ###                                                           ###
 #################################################################
 
-# This script relies on Percona XtraBackup, and this package must
-# be installed before making any backups. Ensure the backup being
-# restored was not created by a newer version of XtraBackup than
-# the version available during a restore.
-
+# This script restores a backup created with the EJBCA Backup
+# script.
+#
 # Make sure you can access mysql without using sudo. On some
 # distributions this is not possible by default, and you need
 # to run the following commands:
 # mysql> UPDATE mysql.user SET plugin = 'mysql_native_password' WHERE User='root';
 # mysql> FLUSH PRIVILEGES;
+
+# By default, this script will move the existing database to /tmp
+# (overwriting any existing files). You can choose to delete the
+# existing database permanently instead, using the +unsafe flag when
+# running the script.
 
 # Backup directory from where the backup is restored, can be mapped
 # to e.g. an NFS share
@@ -27,7 +30,7 @@ APPSRV_TYPE=jboss
 
 # The passphrase which protects the backup, clear this variable
 # to make the script ask for the passphrase.
-PWD=foo123
+BACKUP_PWD="foo123"
 
 ################################################################
 
@@ -50,7 +53,7 @@ fi
 #  if [ "$stopdb" != "y" ] && [ "$stopdb" != "Y" ]; then
 #    exit 1
 #  else
-#    read -s -p 'Enter the MariaDB root password: ' root_pwd 
+#    read -s -p 'Enter the MariaDB root password: ' root_pwd
 #    mysqladmin -uroot -p"$root_pwd" -h127.0.0.1 --protocol=tcp shutdown
 #    if [ $? -ne 0 ]; then
 #      echo "Shutdown of MariaDB failed with non-zero exit code."
@@ -72,7 +75,7 @@ echo '#############################################################'
 # Let the user select the backup to restore.
 echo 'Available backups:'
 PS3='Select backup to restore: '
-select opt in "$BACKUP_DIR/"xb_*.tar.gz.enc; do
+select opt in "$BACKUP_DIR/"mb_*.xb.enc; do
   break
 done
 
@@ -82,57 +85,37 @@ if [ -z "$opt" ]; then
 fi
 
 if [ -z "$PWD" ]; then
-  read -s -p 'Password for backup: ' PWD
+  read -s -p 'Password for backup: ' BACKUP_PWD
   echo ""
 fi
 
-DATE=$(date '+%Y%m%d%H%M%S')
-
-# Write the backup encryption password to a temporary file, only
-# readable by the current user. Writing the password to disk is
-# not optimal, but we need to conceal it from ps.
-ENC_KEY_PASS_FILE="/tmp/xb_ejbca_restore_${DATE}.pass"
-echo -n "$PWD" > "$ENC_KEY_PASS_FILE"
-chmod 600 "$ENC_KEY_PASS_FILE"
-
-# Warn the user about potential loss of data
-echo ""
-read -p '** WARNING ** You are about to wipe the existing databases! Do you want to proceed? (y/N) ' wipe
-if [ "$wipe" != "y" ] && [ "$wipe" != "Y" ]; then
-  echo 'Aborting restore.'
-  exit 1
+if [  "$1" == "+unsafe" ]; then
+  # Warn the user about potential loss of data
+  echo ""
+  read -p '** WARNING ** You are about to wipe the existing databases! Do you want to proceed? (y/N) ' wipe
+  if [ "$wipe" != "y" ] && [ "$wipe" != "Y" ]; then
+    echo 'Aborting restore.'
+    exit 1
+  fi
+  # Wipe existing database files
+  rm -rf /var/lib/mysql/
+  mkdir /var/lib/mysql
+else
+  if [ -d "/tmp/mysql_old" ]; then
+    rm -rf /tmp/mysql_old
+  fi
+  mv /var/lib/mysql /tmp/mysql_old
+  mkdir /var/lib/mysql
 fi
-
-# Wipe existing database files
-rm -rf /var/lib/mysql/*
 
 # Restore the backup
 echo 'Decrypting and decompressing backup... (this may take some time)'
-PV=$(which pv)
-if [ -z "$PV" ]; then
-  echo '** HINT ** Install pv to track progress.'
-  openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" | \
-    tar xzi -C /var/lib/mysql
-else
-  openssl enc -aes-256-cbc -pass "file:$ENC_KEY_PASS_FILE" -d -in "$opt" | \
-    pv -p -t -b | \
-    tar xzi -C /var/lib/mysql
-fi
+openssl enc -d -aes-256-cbc -md sha256 -pass "pass:$BACKUP_PWD" -in "$opt" | mbstream -x -C /var/lib/mysql/
 
 echo 'Copy-back complete! Preparing the backup...'
-xtrabackup --prepare --target-dir=/var/lib/mysql/
-# Your backup is now clean and consistent, and ready to restore.
-# However, you might want to take an extra step to make restores
-# as quick as possible. This is to prepare the backup a second
-# time. The first time makes the data files self-consistent, but
-# it doesn’t create fresh InnoDB log files. If you restore the
-# backup at this point and start MariaDB, it will have to create
-# new log files, which could take a little while, and you might
-# not want to wait for that.
-xtrabackup --prepare --target-dir=/var/lib/mysql/
+mariabackup --prepare --target-dir /var/lib/mysql/
 
 chown -R mysql:mysql /var/lib/mysql
-shred --remove "$ENC_KEY_PASS_FILE"
 
 # Print banner after successful restore
 echo '#############################################################'
@@ -162,6 +145,8 @@ if systemctl is-active --quiet mysql; then
     echo 'machine to clear some caches.'
     exit 1
   fi
+  # Start MariaDB again, reading the newly restored database
+  systemctl start mariadb
 fi
 
 # Need to restart the application server if it was running (again, not
