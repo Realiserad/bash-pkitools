@@ -1,16 +1,19 @@
 #!/bin/bash
 
 #################################################################
-####                                                         ####
-####             EJBCA Backup Script for MariaDB             ####
-####                                                         ####
+###                                                           ###
+###              EJBCA Backup Script for MariaDB              ###
+###                                                           ###
 #################################################################
 
-# This script relies on Percona XtraBackup, and this package must
-# be installed before making any backups. Also, if this script is
-# executed by any other user than root, make sure this user is in
-# the mysql group. You should also prepare a MariaDB user used for
-# backing up data only. This user can be created as follows:
+# This script creates a backup of your MariaDB databases using
+# the mariabackup utility. See https://mariadb.com/kb/en/library/mariabackup/
+# All backups are encrypted with the GPG utility.
+#
+# If this script is executed by any other user than root, make
+# sure this user is in the mysql group. You should also prepare
+# a MariaDB user used for backing up data only. This user can be
+# created as follows:
 # mysql> CREATE USER 'backup'@'localhost' IDENTIFIED BY 'foo123';
 # mysql> GRANT RELOAD, LOCK TABLES, PROCESS, REPLICATION CLIENT ON *.* TO 'backup'@'localhost';
 # mysql> FLUSH PRIVILEGES;
@@ -24,21 +27,21 @@
 #
 # [mysqld]
 # datadir=/var/lib/mysql
-MYSQL_CNF='/opt/wildfly-10.1.0.Final/backup/mysql_backup.cnf'
+MYSQL_CNF='/opt/jboss/backup/mysql_backup.cnf'
 
 # Backup directory, will be created if it does not exist. Can be
 # mapped to e.g. an NFS share.
-BACKUP_DIR='/var/opt/backups'
+BACKUP_DIR='/nfs'
 
 # The passphrase used to protect the backup, clear this variable
 # to make the script ask for the passphrase.
-PWD=
+BACKUP_PWD="foo123"
 
 ################################################################
 
-# This will create XtraBackup files directory in /tmp instead of
+# This will create XtraBackup files directory in /var/lib/mysql instead of
 # cluttering the user's current working directory.
-cd /tmp
+cd /var/lib/mysql
 
 if [ ! -f "$MYSQL_CNF" ]; then
   echo "The MySQL configuration file $MYSQL_CNF does not exist."
@@ -60,12 +63,12 @@ fi
 # by default, make sure everyone in the mysql group can read them
 chmod -R g=u /var/lib/mysql
 
-if [ -z "$PWD" ]; then
+if [ -z "$BACKUP_PWD" ]; then
   read -s -p 'Backup password: ' PWD
   echo ""
   read -s -p 'Repeat backup password: ' PWD2
   echo ""
-  if [ "$PWD" != "$PWD2"  ]; then
+  if [ "$BACKUP_PWD" != "$BACKUP_PWD2"  ]; then
     echo "Passwords do not match."
     exit 1
   fi
@@ -78,39 +81,13 @@ fi
 
 DATE=$(date '+%Y%m%d%H%M%S')
 HOSTNAME=$(hostname)
-BACKUP_NAME="xb_ejbca_${HOSTNAME}_${DATE}"
-ENC_KEY_PASS_FILE="/tmp/$BACKUP_NAME.pass"
-
-# Write the backup encryption password to a temporary file, only
-# readable by the current user. Writing the password to disk is
-# not optimal, but we need to conceal it from ps.
-echo -n "$PWD" > "$ENC_KEY_PASS_FILE"
-chmod 600 "$ENC_KEY_PASS_FILE"
+BACKUP_NAME="mb_ejbca_${HOSTNAME}_${DATE}"
 
 # Create the backup in the backup directory e.g.
-# /var/opt/backups/xb_ejbca_hostname_20180101133700.tar.gz.enc
-PV=$(which pv)
+# /var/opt/backups/mb_ejbca_hostname_20180101133700.xb.gpg
 echo 'Compressing and encrypting backup... (this may take some time)'
-if [ -z "$PV" ]; then
-  echo '** HINT ** Install pv to track progress'
-  xtrabackup --defaults-extra-file="$MYSQL_CNF" \
-      --host=127.0.0.1 \
-      --backup \
-      --stream=tar | \
-    gzip | \
-    openssl enc -aes-256-cbc \
-      -pass "file:$ENC_KEY_PASS_FILE" -e \
-    > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
-else
-  xtrabackup --defaults-extra-file="$MYSQL_CNF" \
-      --host=127.0.0.1 \
-      --backup \
-      --stream=tar | \
-    gzip | \
-    openssl enc -aes-256-cbc \
-      -pass "file:$ENC_KEY_PASS_FILE" -e | \
-    pv -p -t -b \
-    > "${BACKUP_DIR}/${BACKUP_NAME}.tar.gz.enc"
-fi
-
-shred --remove "$ENC_KEY_PASS_FILE"
+mariabackup --defaults-extra-file="$MYSQL_CNF" \
+  --host=127.0.0.1 \
+  --backup \
+  --stream=xbstream | \
+openssl enc -e -aes-256-cbc -md sha256 -pass "pass:$BACKUP_PWD" -out "${BACKUP_DIR}/${BACKUP_NAME}.xb.enc"
